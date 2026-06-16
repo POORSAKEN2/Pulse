@@ -53,3 +53,81 @@ With the app actually running, four real code bugs broke the end-to-end flow:
 Two users can reliably see each other on the map, dots appear/disappear with
 presence, requests connect, text chat flows both ways, and video negotiates —
 end to end.
+
+## Phase 3 — Make it secure
+
+### The core flaw
+There are no accounts (by design), but the client-generated session UUID was used
+as **both** the public peer id (broadcast to everyone in `/api/poll`) **and** the
+only credential. Since every online user's id is handed to every other client,
+anyone could act *as* or *on* anyone.
+
+### Findings, ranked
+| Pri | Issue | What it let an attacker do |
+|-----|-------|-----------------------------|
+| **P0** | Session id = public identity AND sole credential | Impersonate any user (forge `fromId` in `/api/signal`), forcibly evict anyone (`/api/leave` with their id), hijack/tear-down calls, and "busy-grief" (mark any two strangers unavailable via `accept`) |
+| **P1** | No rate limiting; `/api/poll` returned ALL peers uncapped | Hammer Postgres → connection/cost exhaustion; spam `/api/join` → flood every client's map with fake dots |
+| **P1** | Any-origin API access (no credential/origin binding) | Any third-party website could drive the API |
+| **P2** | Signal mailbox uncapped per recipient/sender | Flood a victim's inbox with junk / fake prompts |
+| **P2** | `signal`/`leave` ids only checked `typeof === string`; self-signal allowed | Oversized/malformed actor ids |
+| **P3** | Raw lat/lng sent to server | Momentary exact-location exposure (offset is server-side, raw never stored) — accepted trade-off |
+| **P3** | No security headers | Clickjacking / asset-injection surface |
+
+### What I fixed
+
+**P0 — Server-issued session token (the key fix).**
+- `/api/join` now mints a per-session secret `token` (`crypto.randomUUID()`),
+  stores it on the `Presence` row (new column, **never** returned in `/api/poll`),
+  and returns it once to the caller. Join is `create`-not-`upsert`: a duplicate id
+  → `409` (blocks id takeover).
+- Every mutating call proves ownership via `verifyOwner(id, token)` with a
+  constant-time compare (`lib/auth.ts`):
+  - `/api/poll` — token must match the polled `id` (header `X-Pulse-Token`).
+  - `/api/signal` — token must match `fromId`. This single check kills
+    impersonation, forged accept/end, and busy-griefing at once.
+  - `/api/leave` — token must match `id`. Blocks forced eviction. (`sendBeacon`
+    can't set headers, so the token rides in the body here.)
+- The peer id stays public (it's the signaling address) but is now useless without
+  the secret. Anonymity is preserved — the token is ephemeral, no PII, dropped on
+  leave/staleness.
+- **CSRF bonus:** requiring a custom `X-Pulse-Token` header on poll/signal means
+  browsers won't send it cross-origin without a CORS preflight we never grant.
+
+**P1 — Rate limiting (`lib/ratelimit.ts`).** Postgres-backed fixed window (new
+`RateLimit` table) — chosen because the brief forbids external services (no
+Redis/Upstash) and in-memory wouldn't survive serverless. Per-IP limits: join
+10/min, poll 120/min, signal 60/min, leave 30/min → `429` + `Retry-After`. Expired
+windows are reaped opportunistically inside `/api/poll`.
+
+**P1 — Peer cap.** `/api/poll` now returns at most 500 peers (newest-first),
+bounding payload and client render under a join-flood.
+
+**P2 — Mailbox caps.** `/api/signal` rejects when a recipient already has ≥50
+pending signals, or ≥10 from the same sender.
+
+**P2 — Validation.** Shared `isValidSessionId` (length 8–64) applied to
+`signal`/`leave`; self-signal (`fromId === toId`) rejected.
+
+**P3 — Security headers (`next.config.ts`).** CSP (scoped to allow Mapbox + WebRTC),
+`X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: no-referrer`, `Permissions-Policy` limiting camera/mic/geo to
+self, and HSTS.
+
+### Verified (curl matrix against the live Neon DB)
+join → token; duplicate id → 409; poll without/with-wrong token → 401, correct →
+200; forged `fromId` (no token / wrong token) → 401 (impersonation blocked); leave
+with wrong token → 401 (eviction blocked); self-signal → 400; rate limit → exactly
+10 then 429 with `Retry-After`; mailbox pair cap → 10 then 429; CSP + headers
+present; full connect→busy→end happy path still works with tokens.
+
+### Accepted trade-offs / next steps
+- **Raw coordinates (P3):** the client still sends raw lat/lng so the server can
+  apply the trusted privacy offset; raw is never stored. Doing the offset
+  client-side would avoid transmitting exact coords but lets a malicious client
+  skip it — server-side is the safer default. Worth a hybrid (client offset +
+  server jitter) with more time.
+- **Fixed-window rate limiting** is slightly bursty at window edges vs a sliding
+  window; a dedicated store would be more precise but violates the no-external-
+  services constraint.
+- `'unsafe-eval'` is in the CSP for Next dev HMR; it could be dropped in a
+  prod-only build to tighten further.

@@ -12,13 +12,25 @@ datasource db {
 }
 
 model Presence {
-  id       String   @id // client-generated session uuid
+  id       String   @id // client-generated session uuid (PUBLIC — broadcast as peer id)
+  token    String // server-issued session secret; NEVER returned to clients
   lat      Float // ALREADY privacy-offset coords (raw is never stored)
   lng      Float
   busy     Boolean  @default(false) // true while in an active connection
   lastSeen DateTime
 
   @@index([lastSeen])
+}
+
+// Fixed-window rate-limit counters. Postgres-backed because the app must deploy
+// to Vercel with no external services (no Redis/Upstash). One row per
+// (bucket, window); reaped opportunistically once expired.
+model RateLimit {
+  key       String   @id // `${ip}:${route}:${windowStart}`
+  count     Int      @default(0)
+  expiresAt DateTime
+
+  @@index([expiresAt])
 }
 
 model Signal {
