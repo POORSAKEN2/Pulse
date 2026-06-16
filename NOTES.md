@@ -54,6 +54,56 @@ Two users can reliably see each other on the map, dots appear/disappear with
 presence, requests connect, text chat flows both ways, and video negotiates —
 end to end.
 
+## Phase 2 — Make it good
+
+No mockup was given, so I committed to a single clear direction: a calm,
+monochrome, Apple-adjacent aesthetic (`#f5f5f7` / `#1d1d1f`) with motion that
+sells the "living globe" idea, and full light **and** dark mode. The old UI was
+generic Tailwind zinc + emerald; every surface was reworked to the new system.
+
+### Theme system (light/dark)
+- `app/components/theme.tsx` — a tiny store over `useSyncExternalStore`. `.dark`
+  is toggled on `<html>`; `setPulseTheme` persists the choice to `localStorage`
+  and fires a custom event so every subscriber re-renders. `ThemeToggle` is a
+  reusable sun/moon button.
+- `app/layout.tsx` — a pre-paint inline script reads `localStorage`/system
+  preference and sets `.dark` **before** first paint, killing the flash of the
+  wrong theme. `suppressHydrationWarning` covers the server/client mismatch.
+- `app/globals.css` — `@custom-variant dark`, CSS vars (`--background`,
+  `--foreground`) flipped under `.dark`, and Tailwind v4 `@theme` wiring. Fonts
+  added: Space Grotesk (display) + Sora (entry screen). Icons via `lucide-react`.
+
+### Entry screen — the centerpiece
+`EntryGate` was rebuilt from a plain card into a timed reveal sequence:
+- A short **prelude** ("Bored? / Drop into Pulse. / Tap a dot. / Talk to the
+  world.") plays, then the hero animates in — brand letters, word-by-word
+  headline, button pop, fine print — all driven by staggered CSS keyframe delays
+  off a shared `--entry-page-delay`.
+- Slow-drifting monochrome **orbs** behind everything for depth.
+- The **Enter** button is magnetic: `onPointerMove` tracks the cursor and drives
+  CSS vars for a 3D tilt, slight follow-shift, scale, and a radial glow that
+  follows the pointer; it eases back to rest on leave.
+- Accessibility: real text is in `sr-only` spans (animated copies are
+  `aria-hidden`), and a `prefers-reduced-motion` block disables orbs, reveals,
+  and tilt for users who opt out.
+
+### Component restyles
+- **WorldMap** — map style is now theme-aware (`light-v11` / `dark-v11`) and
+  swaps live via `setStyle` when the theme changes; the "online" count chip and
+  token-missing notice were restyled to the glass/monochrome look.
+- **ChatPanel** — monochrome bubbles, `Video`/`X` icons, and a new accessible
+  **"End chat?" confirmation modal** (`role="dialog"`, `aria-modal`, labelled +
+  described, Escape to close, focus moved to Cancel on open and back to the End
+  button on close) so a call isn't dropped by a stray tap.
+- **ConnectionPrompt** and all `page.tsx` overlays (notice toast, "requesting",
+  video-waiting) moved to the same palette with subtle borders + backdrop blur.
+
+### Dev tooling (not user-facing)
+`lib/echobot.ts` + a `DUMMY_ENABLED` flag in `page.tsx` add an optional local
+**echo peer** — a fake test dot near you that loops chat/video back, so the full
+connect flow can be exercised solo without a second browser. Shipped **off**
+(`DUMMY_ENABLED = false`).
+
 ## Phase 3 — Make it secure
 
 ### The core flaw
