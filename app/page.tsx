@@ -83,6 +83,10 @@ export default function Home() {
       onRemoteStream: (stream) => setRemoteStream(stream),
       onConnectionState: (state) => {
         if (state === "failed") {
+          // Peer vanished without a clean "end" (e.g. tab closed / network
+          // drop). Send one so the server clears busy on both sides; without
+          // this our own presence stays busy=true until reload.
+          void sendSignal(sessionId, peerId, "end");
           teardown("Connection failed (network).");
         }
       },
