@@ -4,8 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import "mapbox-gl/dist/mapbox-gl.css";
 import type { Map as MapboxMap, Marker } from "mapbox-gl";
 import type { PeerDot } from "@/lib/types";
+import { getCurrentTheme, usePulseTheme } from "./theme";
 
 const TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? "pk.eyJ1IjoicHVsc2UtbWFwIiwiYSI6ImNrMDBkZW1vMDAwMDAwMDAifQ.AAAAAAAAAAAAAAAAAAAAAA";
+const MAP_STYLE_BY_THEME = {
+  light: "mapbox://styles/mapbox/light-v11",
+  dark: "mapbox://styles/mapbox/dark-v11",
+} as const;
 
 function dotColor(id: string): string {
   let hash = 0;
@@ -31,6 +36,7 @@ export default function WorldMap({
   const markersRef = useRef<Map<string, Marker>>(new Map());
   const meMarkerRef = useRef<Marker | null>(null);
   const [ready, setReady] = useState(false);
+  const theme = usePulseTheme();
 
   // Marker click handlers are bound once, so read the live click handler +
   // connectability through refs (synced in an effect, never during render).
@@ -53,7 +59,7 @@ export default function WorldMap({
       mapboxgl.accessToken = TOKEN;
       const map = new mapboxgl.Map({
         container: containerRef.current,
-        style: "mapbox://styles/mapbox/dark-v11",
+        style: MAP_STYLE_BY_THEME[getCurrentTheme()],
         // Open centered on the user if we know where they are, else world view.
         center: me ? [me.lng, me.lat] : [0, 20],
         zoom: me ? 4 : 1.4,
@@ -78,6 +84,12 @@ export default function WorldMap({
     // `me` is only read for the initial center; we don't want to re-init on change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    map.setStyle(MAP_STYLE_BY_THEME[theme]);
+  }, [theme]);
 
   // Show / move the user's own "you are here" pin.
   useEffect(() => {
@@ -155,20 +167,23 @@ export default function WorldMap({
 
   return (
     <div className="absolute inset-0">
-      <div ref={containerRef} className="h-full w-full bg-zinc-900" />
+      <div
+        ref={containerRef}
+        className="h-full w-full bg-[#f5f5f7] dark:bg-[#1d1d1f]"
+      />
 
       {!TOKEN && (
         <div className="absolute inset-0 flex items-center justify-center p-6 text-center">
-          <p className="max-w-md rounded-lg bg-zinc-800 p-4 text-sm text-zinc-200">
+          <p className="max-w-md rounded-lg bg-white/90 p-4 text-sm text-[#1d1d1f] shadow-lg backdrop-blur dark:bg-[#1d1d1f]/90 dark:text-[#f5f5f7]">
             Set{" "}
-            <code className="text-emerald-400">NEXT_PUBLIC_MAPBOX_TOKEN</code> in{" "}
+            <code className="text-[#1d1d1f] dark:text-[#f5f5f7]">NEXT_PUBLIC_MAPBOX_TOKEN</code> in{" "}
             <code>.env</code> to load the map.
           </p>
         </div>
       )}
 
       {/* Online count */}
-      <div className="absolute bottom-4 left-4 rounded-full bg-zinc-900/80 px-3 py-1.5 text-xs text-zinc-300 backdrop-blur">
+      <div className="absolute bottom-4 left-4 rounded-full border border-[#1d1d1f]/10 bg-white/80 px-3 py-1.5 text-xs text-[#1d1d1f]/70 shadow-lg backdrop-blur dark:border-[#f5f5f7]/10 dark:bg-[#1d1d1f]/80 dark:text-[#f5f5f7]/70">
         {peers.length} online
       </div>
     </div>
