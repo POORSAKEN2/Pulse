@@ -45,6 +45,19 @@ function buildIceConfig(): RTCConfiguration {
 
 const ICE_CONFIG: RTCConfiguration = buildIceConfig();
 
+// TEMP diagnostic — confirms whether TURN actually made it into the running
+// bundle. If you don't see hasTURN:true here, the build didn't pick up the env
+// vars (rebuild needed, or deploy host is missing them). Remove once fixed.
+if (typeof window !== "undefined") {
+  const hasTURN = (ICE_CONFIG.iceServers ?? []).some((s) => {
+    const u = s.urls;
+    return Array.isArray(u)
+      ? u.some((x) => x.startsWith("turn"))
+      : typeof u === "string" && u.startsWith("turn");
+  });
+  console.log("[webrtc] ICE config", { hasTURN, servers: ICE_CONFIG.iceServers });
+}
+
 export class PeerSession {
   private pc: RTCPeerConnection;
   private dc: RTCDataChannel | null = null;
@@ -64,6 +77,10 @@ export class PeerSession {
 
     this.pc.onicecandidate = ({ candidate }) => {
       if (candidate) {
+        // TEMP diagnostic — log candidate type. "relay" = TURN is working and
+        // cross-network will connect. If you only ever see "host"/"srflx" and
+        // never "relay", TURN creds/host are wrong or quota is exhausted.
+        console.log("[webrtc] local candidate", candidate.type, candidate.candidate);
         this.cb.onSignal("ice", JSON.stringify(candidate));
       }
     };
