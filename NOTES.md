@@ -243,3 +243,31 @@ block *on*. Block is therefore **session-scoped and client-side**:
   which trades away anonymity — deliberately left out; the session blocklist is the
   right fit for a no-accounts product. A reporting signal that auto-expires would be
   the privacy-preserving middle ground.
+
+---
+
+## Deployment (Vercel)
+
+Single Next.js project, no external services — deploys as-is.
+
+### Environment variables (set in Vercel → Project → Settings → Environment Variables)
+- `DATABASE_URL` — Postgres connection string (Neon **pooled** URL; the Prisma
+  client reuses one pooled connection across warm serverless invocations, see
+  `lib/prisma.ts`).
+- `NEXT_PUBLIC_MAPBOX_TOKEN` — Mapbox GL token. Public by design (ships to the
+  browser); restrict it to the deployed domain via Mapbox's URL restrictions so a
+  leaked token can't be reused elsewhere.
+
+### Schema on deploy
+- Applied automatically by the build script: `prisma generate && prisma db push
+  && next build`. Every deploy reconciles the DB to `schema.prisma` — no manual
+  step, which closes the original Phase 1 bug (schema had never been pushed).
+- Chose `db push` over migrations on purpose: the DB holds only ephemeral
+  coordination rows (presence, signals, rate-limit counters) — there is no durable
+  data and no migration history worth keeping. `--accept-data-loss` is safe here for
+  the same reason. The drifted/empty migration files were removed.
+
+### Notes
+- No `vercel.json` needed — stock Next.js build/output.
+- Security headers (CSP, HSTS, etc.) are served from `next.config.ts`.
+- `allowedDevOrigins` in `next.config.ts` is a dev-only ngrok allowance; inert in production.
