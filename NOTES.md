@@ -181,3 +181,65 @@ present; full connect→busy→end happy path still works with tokens.
   services constraint.
 - `'unsafe-eval'` is in the CSP for Next dev HMR; it could be dropped in a
   prod-only build to tighten further.
+
+## Phase 4 — Make it better
+
+### What I built: **Vibes** (matching) + **Skip/Block** (safety)
+A globe full of identical dots gives you zero reason to tap *this* one over that
+one — you're cold-calling a random stranger. Vibes fix that, and a session
+blocklist gives you a clean exit from anyone you don't want to talk to. Together
+they make Pulse feel both more **alive** (intentional, readable connections) and
+more **safe** (consent + a way out), without breaking the stateless/anonymous
+contract.
+
+### Vibes — ephemeral interest matching
+- On the entry screen you pick a **vibe** from a fixed set (💬 Just chat, 🎧 Music,
+  🎮 Gaming, 🌊 Deep talk, 🌙 Night owl, 🎉 Fun) before dropping onto the map
+  (`VibePicker`), and you can **change it live** afterwards.
+- **Why a fixed set, not free text:** anonymity + nothing-stored is the whole
+  product. A closed enum means there's no user-generated string to moderate, no PII
+  to leak, and trivial server-side validation.
+
+### Reading vibes on the map (UX)
+- Every dot is **colored by its vibe** and floats the vibe **emoji above it**, so
+  the map reads at a glance.
+- A **filter bar** up top shows only one vibe ("just the night owls"); the online
+  count reflects the active filter.
+- Your own **"Me" pin** shows your vibe as a tinted pill above it.
+- **Tapping a dot opens a Connect card** above that pin showing the stranger's vibe
+  + a **Connect** button (with Busy / In-a-chat states). The card is a React overlay
+  positioned via `map.project()` — it stays glued to the pin on pan/zoom and closes
+  on a background click, when the peer goes offline, or once you start connecting.
+  (Tapping no longer fires a request directly — you see who you're reaching first.)
+- A small **top nav bar** carries the Pulse wordmark + the theme toggle (the map
+  view previously had no toggle).
+
+### How it stays true to the architecture
+- One nullable `vibe` column on `Presence` — still ephemeral, dropped on
+  leave/staleness like everything else. No new tables, no history, no accounts.
+- `lib/vibes.ts` is the single source of truth shared by client + server
+  (definitions, colors, `isValidVibe`).
+- `/api/join` validates the vibe against the fixed set (`400` otherwise) and stores
+  it; `/api/poll` returns it on each `PeerDot`.
+- `/api/vibe` (new) lets you change your vibe mid-session — **owner-authed** with
+  the same `X-Pulse-Token` from Phase 3, so it inherits that security model; nothing
+  about it changes.
+
+### Skip / Block — a way out
+The server is intentionally stateless and anonymous, so there's nothing durable to
+block *on*. Block is therefore **session-scoped and client-side**:
+- A **Skip** button in the chat header ends the connection and hides that peer's
+  dot for the rest of the tab; **declining** an incoming request also blocks, so a
+  stranger can't immediately re-spam you.
+- Blocked peers are filtered out of the map, and any further `request` from them is
+  **auto-declined** before it ever surfaces a prompt.
+- Dies with the tab, exactly like the rest of Pulse.
+
+### What I'd do next with more time
+- **Vibe-aware matchmaking:** a "connect me to a random Music person" button
+  instead of only tap-to-connect.
+- **Mutual interest highlight:** subtly emphasize dots that share *your* vibe.
+- **Server-assisted block** would need durable identity (cookie/device token),
+  which trades away anonymity — deliberately left out; the session blocklist is the
+  right fit for a no-accounts product. A reporting signal that auto-expires would be
+  the privacy-preserving middle ground.

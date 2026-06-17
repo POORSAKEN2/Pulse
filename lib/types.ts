@@ -15,6 +15,7 @@ export interface PeerDot {
   lat: number;
   lng: number;
   busy: boolean;
+  vibe: string | null; // interest tag id (see lib/vibes.ts), or null if unset
 }
 
 export interface SignalMsg {

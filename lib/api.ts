@@ -12,11 +12,12 @@ export async function join(
   id: string,
   lat: number,
   lng: number,
+  vibe?: string,
 ): Promise<void> {
   const res = await fetch("/api/join", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id, lat, lng }),
+    body: JSON.stringify({ id, lat, lng, vibe }),
   });
   if (!res.ok) throw new Error(`join failed: ${res.status}`);
   const data = (await res.json()) as { token?: string };
@@ -46,6 +47,19 @@ export async function sendSignal(
       ...(auth ? { [TOKEN_HEADER]: auth.token } : {}),
     },
     body: JSON.stringify({ fromId, toId, type, payload }),
+  });
+}
+
+// Change the caller's vibe on their live presence row. Owner-authed via the
+// session token (normal fetch so the header rides along, unlike leave's beacon).
+export async function updateVibe(id: string, vibe: string): Promise<void> {
+  await fetch("/api/vibe", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(auth ? { [TOKEN_HEADER]: auth.token } : {}),
+    },
+    body: JSON.stringify({ id, vibe }),
   });
 }
 

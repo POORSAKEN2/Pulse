@@ -1,12 +1,18 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { LogOut } from "lucide-react";
 import EntryGate from "./components/EntryGate";
 import WorldMap from "./components/WorldMap";
 import ConnectionPrompt from "./components/ConnectionPrompt";
-import ChatPanel, { type ChatMessage } from "./components/ChatPanel";
+import ChatPanel, {
+  type ChatMessage,
+  type SystemIcon,
+} from "./components/ChatPanel";
 import VideoPanel from "./components/VideoPanel";
-import { join, leave, poll, sendSignal } from "@/lib/api";
+import VibePicker from "./components/VibePicker";
+import { ThemeToggle } from "./components/theme";
+import { join, leave, poll, sendSignal, updateVibe } from "@/lib/api";
 import { PeerSession, type DescType, type PeerControl } from "@/lib/webrtc";
 import { EchoPeer, DUMMY_PEER_ID } from "@/lib/echobot";
 import { POLL_INTERVAL_MS } from "@/lib/presence";
@@ -29,15 +35,24 @@ const REQUEST_TIMEOUT_MS = 30_000;
 
 export default function Home() {
   const [phase, setPhase] = useState<"gate" | "live">("gate");
-  const [sessionId] = useState(() => crypto.randomUUID());
+  // Regenerated on disconnect and on a failed join so a re-entry never reuses a
+  // session id that still has a presence row mid-delete (which would 409).
+  const [sessionId, setSessionId] = useState(() => crypto.randomUUID());
   const [peers, setPeers] = useState<PeerDot[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  // Track state for the on-call controls. *Mine = my own toggle; *Remote = the
+  // stranger's state, kept in sync via mic-on/off + cam-on/off controls.
+  const [micOn, setMicOn] = useState(true);
+  const [camOn, setCamOn] = useState(true);
+  const [remoteMicOn, setRemoteMicOn] = useState(true);
+  const [remoteCamOn, setRemoteCamOn] = useState(true);
   const [myLocation, setMyLocation] = useState<{ lat: number; lng: number } | null>(
     null,
   );
+  const [myVibe, setMyVibe] = useState<string | null>(null);
 
   const [conn, _setConn] = useState<Conn>({ kind: "idle" });
   const connRef = useRef<Conn>(conn);
@@ -57,13 +72,41 @@ export default function Home() {
   const msgId = useRef(0);
   const requestTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Session-scoped blocklist. Purely client-side (the server is stateless and
+  // anonymous, so there's nothing durable to block on): a blocked peer's dot is
+  // hidden and any request from them is auto-declined for the rest of this tab.
+  const [blocked, setBlocked] = useState<string[]>([]);
+  const blockedRef = useRef<Set<string>>(new Set());
+  function blockPeer(id: string) {
+    if (blockedRef.current.has(id)) return;
+    blockedRef.current.add(id);
+    setBlocked([...blockedRef.current]);
+  }
+
   function showNotice(text: string) {
     setNotice(text);
     window.setTimeout(() => setNotice(null), 3500);
   }
 
   function addMessage(mine: boolean, text: string) {
-    setMessages((prev) => [...prev, { id: msgId.current++, mine, text }]);
+    setMessages((prev) => [
+      ...prev,
+      { id: msgId.current++, kind: "user", mine, text },
+    ]);
+  }
+
+  function addSystemMessage(icon: SystemIcon, text: string) {
+    setMessages((prev) => [
+      ...prev,
+      { id: msgId.current++, kind: "system", icon, text },
+    ]);
+  }
+
+  function resetMediaToggles() {
+    setMicOn(true);
+    setCamOn(true);
+    setRemoteMicOn(true);
+    setRemoteCamOn(true);
   }
 
   function teardown(message?: string) {
@@ -72,6 +115,7 @@ export default function Home() {
     peerRef.current = null;
     setLocalStream(null);
     setRemoteStream(null);
+    resetMediaToggles();
     setVideo("none");
     setMessages([]);
     setConn({ kind: "idle" });
@@ -124,15 +168,31 @@ export default function Home() {
         break;
       case "video-decline":
         if (videoRef.current === "requesting") {
+          // Release the camera we pre-acquired on click — the peer said no.
+          ps?.stopVideo();
           setVideo("none");
-          showNotice("Video declined.");
+          addSystemMessage("call-missed", "Missed a Video Call");
         }
         break;
       case "video-end":
         ps?.stopVideo();
         setLocalStream(null);
         setRemoteStream(null);
+        resetMediaToggles();
         setVideo("none");
+        addSystemMessage("call-ended", "Video Call Ended");
+        break;
+      case "mic-on":
+        setRemoteMicOn(true);
+        break;
+      case "mic-off":
+        setRemoteMicOn(false);
+        break;
+      case "cam-on":
+        setRemoteCamOn(true);
+        break;
+      case "cam-off":
+        setRemoteCamOn(false);
         break;
     }
   }
@@ -186,8 +246,22 @@ export default function Home() {
 
   function declineIncoming() {
     if (connRef.current.kind !== "incoming") return;
-    void sendSignal(sessionId, connRef.current.peerId, "decline");
+    const peerId = connRef.current.peerId;
+    // Declining also blocks: a stranger you said no to can't immediately
+    // re-spam you with another request this session.
+    blockPeer(peerId);
+    void sendSignal(sessionId, peerId, "decline");
     setConn({ kind: "idle" });
+  }
+
+  // End the current connection AND hide the peer for the rest of the session.
+  function blockAndSkip() {
+    const c = connRef.current;
+    if (c.kind === "connecting" || c.kind === "connected") {
+      blockPeer(c.peerId);
+      void sendSignal(sessionId, c.peerId, "end");
+    }
+    teardown("Skipped — you won't see them again this session.");
   }
 
   function endConnection() {
@@ -198,10 +272,47 @@ export default function Home() {
     teardown();
   }
 
-  function startVideoRequest() {
-    if (videoRef.current !== "none" || !peerRef.current) return;
+  // Leave the live map entirely and return to the entry gate. Ends any active
+  // connection, drops our presence from the server, and clears session-scoped
+  // state (peers, blocklist) so a fresh entry starts clean.
+  function disconnect() {
+    const c = connRef.current;
+    if (c.kind !== "idle") {
+      void sendSignal(sessionId, c.peerId, "end");
+    }
+    teardown();
+    leave(sessionId);
+    setPeers([]);
+    blockedRef.current.clear();
+    setBlocked([]);
+    // Fresh id for the next entry. leave() above already fired with the old id
+    // (and its token), so the old row is on its way out; a new id avoids racing
+    // that delete with a same-id create (409).
+    setSessionId(crypto.randomUUID());
+    setPhase("gate");
+  }
+
+  async function startVideoRequest() {
+    const ps = peerRef.current;
+    if (videoRef.current !== "none" || !ps) return;
+    // Grab the camera NOW, inside the click gesture. getUserMedia is rejected by
+    // Safari/iOS (and flaky elsewhere) when called later from the signaling
+    // callback that fires on the peer's accept — which left the requester with
+    // no camera and no controls. We only acquire here; tracks aren't sent until
+    // startVideo() attaches them once the peer accepts.
+    try {
+      await ps.acquireMedia();
+    } catch {
+      showNotice("Camera unavailable.");
+      return;
+    }
+    if (videoRef.current !== "none") {
+      // Chat ended / state changed while the permission prompt was open.
+      ps.stopVideo();
+      return;
+    }
     setVideo("requesting");
-    peerRef.current.sendControl("video-request");
+    ps.sendControl("video-request");
   }
 
   function acceptVideo() {
@@ -223,6 +334,7 @@ export default function Home() {
   function declineVideo() {
     peerRef.current?.sendControl("video-decline");
     setVideo("none");
+    addSystemMessage("call-missed", "Missed a Video Call");
   }
 
   function endVideo() {
@@ -231,13 +343,35 @@ export default function Home() {
     ps?.sendControl("video-end");
     setLocalStream(null);
     setRemoteStream(null);
+    resetMediaToggles();
     setVideo("none");
+    addSystemMessage("call-ended", "Video Call Ended");
+  }
+
+  function toggleMic() {
+    const ps = peerRef.current;
+    if (!ps) return;
+    const next = !micOn;
+    ps.setMic(next);
+    setMicOn(next);
+    ps.sendControl(next ? "mic-on" : "mic-off");
+  }
+
+  function toggleCam() {
+    const ps = peerRef.current;
+    if (!ps) return;
+    const next = !camOn;
+    ps.setCam(next);
+    setCamOn(next);
+    ps.sendControl(next ? "cam-on" : "cam-off");
   }
 
   function processSignal(sig: SignalMsg) {
     switch (sig.type) {
       case "request": {
-        if (connRef.current.kind === "idle") {
+        if (blockedRef.current.has(sig.fromId)) {
+          void sendSignal(sessionId, sig.fromId, "decline");
+        } else if (connRef.current.kind === "idle") {
           setConn({ kind: "incoming", peerId: sig.fromId });
         } else {
           void sendSignal(sessionId, sig.fromId, "decline");
@@ -329,9 +463,24 @@ export default function Home() {
     };
   }, [sessionId, phase]);
 
-  async function handleReady(lat: number, lng: number) {
+  function changeVibe(id: string) {
+    if (id === myVibe) return;
+    setMyVibe(id);
+    void updateVibe(sessionId, id);
+  }
+
+  async function handleReady(lat: number, lng: number, vibe: string) {
     setMyLocation({ lat, lng });
-    await join(sessionId, lat, lng);
+    setMyVibe(vibe);
+    try {
+      await join(sessionId, lat, lng, vibe);
+    } catch (e) {
+      // Join failed (rate limit, network, or a half-created row → 409). Mint a
+      // fresh id so the retry can't keep hitting the same wedged id, then
+      // rethrow so EntryGate surfaces the error instead of spinning forever.
+      setSessionId(crypto.randomUUID());
+      throw e;
+    }
     setPhase("live");
   }
 
@@ -343,7 +492,7 @@ export default function Home() {
 
   // Fake test dot placed near you; clicking it connects to the local echo bot.
   const connPeerId = "peerId" in conn ? conn.peerId : null;
-  const mapPeers =
+  const allPeers =
     DUMMY_ENABLED && myLocation
       ? [
           ...peers,
@@ -352,18 +501,50 @@ export default function Home() {
             lat: myLocation.lat + 0.018,
             lng: myLocation.lng + 0.018,
             busy: connPeerId === DUMMY_PEER_ID,
+            vibe: "chat",
           },
         ]
       : peers;
+  // Hide anyone this session has blocked/skipped.
+  const mapPeers = allPeers.filter((p) => !blocked.includes(p.id));
 
   return (
     <main className="fixed inset-0 overflow-hidden bg-[#f5f5f7] text-[#1d1d1f] dark:bg-[#1d1d1f] dark:text-[#f5f5f7]">
       <WorldMap
         peers={mapPeers}
         me={myLocation}
+        myVibe={myVibe}
         onPeerClick={requestConnection}
         canConnect={conn.kind === "idle"}
       />
+
+      {/* Top navigation bar — Pulse wordmark + theme toggle. */}
+      <header className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center justify-between p-4">
+        <div className="pointer-events-auto flex items-center gap-2">
+          <div className="flex items-center gap-2 rounded-full border border-[#1d1d1f]/10 bg-white/80 px-3.5 py-2 shadow-lg backdrop-blur dark:border-[#f5f5f7]/10 dark:bg-[#1d1d1f]/80">
+            <span className="relative flex h-2 w-2" aria-hidden>
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#1d1d1f] opacity-30 dark:bg-[#f5f5f7]" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-[#1d1d1f] dark:bg-[#f5f5f7]" />
+            </span>
+            <span className="font-display text-lg font-bold leading-none tracking-tight">
+              Pulse
+            </span>
+          </div>
+          <VibePicker vibe={myVibe} onChange={changeVibe} />
+        </div>
+
+        <div className="pointer-events-auto flex items-center gap-2">
+          <button
+            onClick={disconnect}
+            title="Disconnect and return to the entry screen"
+            className="inline-flex h-11 cursor-pointer items-center gap-1.5 rounded-full border border-[#1d1d1f]/10 bg-white/80 px-4 text-sm font-medium text-[#1d1d1f] shadow-lg backdrop-blur transition-colors duration-200 hover:bg-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1d1d1f] dark:border-[#f5f5f7]/10 dark:bg-[#1d1d1f]/80 dark:text-[#f5f5f7] dark:hover:bg-[#1d1d1f] dark:focus-visible:outline-[#f5f5f7]"
+          >
+            <LogOut aria-hidden="true" size={16} strokeWidth={2} />
+            Disconnect
+          </button>
+          <ThemeToggle className="grid h-11 w-11 cursor-pointer place-items-center rounded-full border border-[#1d1d1f]/10 bg-white/80 text-[#1d1d1f] shadow-lg backdrop-blur transition-colors duration-200 hover:bg-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1d1d1f] dark:border-[#f5f5f7]/10 dark:bg-[#1d1d1f]/80 dark:text-[#f5f5f7] dark:hover:bg-[#1d1d1f] dark:focus-visible:outline-[#f5f5f7]" />
+        </div>
+      </header>
 
       {notice && (
         <div className="absolute left-1/2 top-20 z-30 -translate-x-1/2 rounded-full border border-[#1d1d1f]/10 bg-white/90 px-4 py-2 text-sm text-[#1d1d1f] shadow-lg backdrop-blur dark:border-[#f5f5f7]/10 dark:bg-[#1d1d1f]/90 dark:text-[#f5f5f7]">
@@ -404,6 +585,7 @@ export default function Home() {
           }}
           onStartVideo={startVideoRequest}
           onEnd={endConnection}
+          onBlock={blockAndSkip}
         />
       )}
 
@@ -428,6 +610,12 @@ export default function Home() {
         <VideoPanel
           localStream={localStream}
           remoteStream={remoteStream}
+          micOn={micOn}
+          camOn={camOn}
+          remoteMicOn={remoteMicOn}
+          remoteCamOn={remoteCamOn}
+          onToggleMic={toggleMic}
+          onToggleCam={toggleCam}
           onEnd={endVideo}
         />
       )}
