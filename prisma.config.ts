@@ -11,10 +11,9 @@ try {
 }
 
 export default defineConfig({
+  // Schema is applied with `prisma db push` (see build script) — the app stores
+  // only ephemeral coordination rows, so there is no migration history to keep.
   schema: path.join("prisma", "schema.prisma"),
-  migrations: {
-    path: path.join("prisma", "migrations"),
-  },
   datasource: {
     url: env("DATABASE_URL"),
   },
