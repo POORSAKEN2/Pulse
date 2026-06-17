@@ -18,9 +18,32 @@ interface PeerCallbacks {
   onChannelOpen: () => void;
 }
 
-const ICE_CONFIG: RTCConfiguration = {
-  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-};
+// STUN alone only works when both peers can reach each other directly (same
+// network / friendly NAT). Cross-network calls (mobile data, symmetric NAT,
+// firewalls) need a TURN relay or the connection goes to "failed". TURN creds
+// are read from env so they aren't hardcoded; without them we fall back to
+// STUN-only, which is fine for local dev.
+function buildIceConfig(): RTCConfiguration {
+  const iceServers: RTCIceServer[] = [
+    { urls: "stun:stun.l.google.com:19302" },
+  ];
+
+  const turnUrls = process.env.NEXT_PUBLIC_TURN_URLS;
+  const turnUser = process.env.NEXT_PUBLIC_TURN_USERNAME;
+  const turnCred = process.env.NEXT_PUBLIC_TURN_CREDENTIAL;
+
+  if (turnUrls && turnUser && turnCred) {
+    iceServers.push({
+      urls: turnUrls.split(",").map((u) => u.trim()).filter(Boolean),
+      username: turnUser,
+      credential: turnCred,
+    });
+  }
+
+  return { iceServers };
+}
+
+const ICE_CONFIG: RTCConfiguration = buildIceConfig();
 
 export class PeerSession {
   private pc: RTCPeerConnection;
