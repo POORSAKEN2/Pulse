@@ -54,6 +54,17 @@ export class EchoPeer {
     }
   }
 
+  // Mirrors PeerSession.acquireMedia — gesture-safe camera grab with no "send".
+  async acquireMedia(): Promise<MediaStream> {
+    if (!this.localStream) {
+      this.localStream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true,
+      });
+    }
+    return this.localStream;
+  }
+
   async startVideo(): Promise<MediaStream> {
     if (!this.localStream) {
       this.localStream = await navigator.mediaDevices.getUserMedia({
@@ -65,6 +76,23 @@ export class EchoPeer {
     // something to show.
     this.cb.onRemoteStream(this.localStream);
     return this.localStream;
+  }
+
+  // Mirror PeerSession's track toggles so EchoPeer stays interchangeable. Since
+  // the echo's "remote" stream IS the local stream, toggling also affects the
+  // mirrored view — good enough for solo UI testing.
+  setMic(on: boolean): boolean {
+    const track = this.localStream?.getAudioTracks()[0];
+    if (!track) return false;
+    track.enabled = on;
+    return on;
+  }
+
+  setCam(on: boolean): boolean {
+    const track = this.localStream?.getVideoTracks()[0];
+    if (!track) return false;
+    track.enabled = on;
+    return on;
   }
 
   stopVideo() {

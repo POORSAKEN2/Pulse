@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, Video, X } from "lucide-react";
+import { AlertTriangle, Ban, PhoneMissed, PhoneOff, Video, X } from "lucide-react";
 
-export interface ChatMessage {
-  id: number;
-  mine: boolean;
-  text: string;
-}
+export type SystemIcon = "call-ended" | "call-missed";
+
+export type ChatMessage =
+  | { id: number; kind: "user"; mine: boolean; text: string }
+  | { id: number; kind: "system"; icon: SystemIcon; text: string };
 
 export default function ChatPanel({
   messages,
@@ -16,6 +16,7 @@ export default function ChatPanel({
   onSend,
   onStartVideo,
   onEnd,
+  onBlock,
 }: {
   messages: ChatMessage[];
   connected: boolean;
@@ -23,6 +24,7 @@ export default function ChatPanel({
   onSend: (text: string) => void;
   onStartVideo: () => void;
   onEnd: () => void;
+  onBlock: () => void;
 }) {
   const [draft, setDraft] = useState("");
   const [showEndConfirm, setShowEndConfirm] = useState(false);
@@ -75,6 +77,14 @@ export default function ChatPanel({
         </div>
         <div className="flex gap-2">
           <button
+            onClick={onBlock}
+            title="Block this stranger and skip — you won't see them again this session"
+            className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-[#1d1d1f]/20 px-3 py-1.5 text-sm transition-colors duration-200 hover:border-red-400 hover:text-red-500 dark:border-[#f5f5f7]/20"
+          >
+            <Ban aria-hidden="true" size={16} strokeWidth={2} />
+            Skip
+          </button>
+          <button
             onClick={onStartVideo}
             disabled={!connected || videoBusy}
             className="inline-flex items-center gap-1.5 rounded-full border border-[#1d1d1f]/20 px-3 py-1.5 text-sm transition-colors duration-200 hover:border-[#1d1d1f]/45 disabled:opacity-40 dark:border-[#f5f5f7]/20 dark:hover:border-[#f5f5f7]/45"
@@ -99,22 +109,40 @@ export default function ChatPanel({
             Say hello. Messages are peer-to-peer and never stored.
           </p>
         )}
-        {messages.map((m) => (
-          <div
-            key={m.id}
-            className={`flex ${m.mine ? "justify-end" : "justify-start"}`}
-          >
-            <span
-              className={`max-w-[80%] rounded-2xl px-3 py-2 text-sm ${
-                m.mine
-                  ? "bg-[#1d1d1f] text-[#f5f5f7] dark:bg-[#f5f5f7] dark:text-[#1d1d1f]"
-                  : "bg-[#1d1d1f]/10 text-[#1d1d1f] dark:bg-[#f5f5f7]/10 dark:text-[#f5f5f7]"
-              }`}
+        {messages.map((m) =>
+          m.kind === "system" ? (
+            <div key={m.id} className="flex justify-center">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-[#1d1d1f]/8 px-3 py-1 text-xs text-[#1d1d1f]/55 dark:bg-[#f5f5f7]/8 dark:text-[#f5f5f7]/55">
+                {m.icon === "call-ended" ? (
+                  <PhoneOff aria-hidden="true" size={13} strokeWidth={2} />
+                ) : (
+                  <PhoneMissed
+                    aria-hidden="true"
+                    size={13}
+                    strokeWidth={2}
+                    className="text-red-500"
+                  />
+                )}
+                {m.text}
+              </span>
+            </div>
+          ) : (
+            <div
+              key={m.id}
+              className={`flex ${m.mine ? "justify-end" : "justify-start"}`}
             >
-              {m.text}
-            </span>
-          </div>
-        ))}
+              <span
+                className={`max-w-[80%] rounded-2xl px-3 py-2 text-sm ${
+                  m.mine
+                    ? "bg-[#1d1d1f] text-[#f5f5f7] dark:bg-[#f5f5f7] dark:text-[#1d1d1f]"
+                    : "bg-[#1d1d1f]/10 text-[#1d1d1f] dark:bg-[#f5f5f7]/10 dark:text-[#f5f5f7]"
+                }`}
+              >
+                {m.text}
+              </span>
+            </div>
+          ),
+        )}
         <div ref={endRef} />
       </div>
 

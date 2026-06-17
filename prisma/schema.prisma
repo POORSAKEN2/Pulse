@@ -17,6 +17,7 @@ model Presence {
   lat      Float // ALREADY privacy-offset coords (raw is never stored)
   lng      Float
   busy     Boolean  @default(false) // true while in an active connection
+  vibe     String? // ephemeral interest tag from a fixed set (see lib/vibes.ts)
   lastSeen DateTime
 
   @@index([lastSeen])

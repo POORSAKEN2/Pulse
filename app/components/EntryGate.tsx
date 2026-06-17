@@ -9,6 +9,7 @@ import {
   type PointerEvent,
 } from "react";
 import { ThemeToggle } from "./theme";
+import { VIBES, DEFAULT_VIBE } from "@/lib/vibes";
 
 const sora = Sora({
   subsets: ["latin"],
@@ -37,7 +38,7 @@ const MOTION_BUTTON_REST_STYLE: MotionButtonStyle = {
 };
 
 const MOTION_FIELD_REACH = 150;
-const ENTRY_SEQUENCE_DELAY_MS = 4_300;
+const ENTRY_SEQUENCE_DELAY_MS = 2_800;
 const PRELUDE_LINES = [
   "Bored?",
   "Drop into Pulse.",
@@ -72,11 +73,27 @@ function clamp(value: number, min: number, max: number) {
 export default function EntryGate({
   onReady,
 }: {
-  onReady: (lat: number, lng: number) => void;
+  onReady: (lat: number, lng: number, vibe: string) => void;
 }) {
   const [status, setStatus] = useState<"idle" | "locating" | "error">("idle");
   const [error, setError] = useState<string>("");
+  const [vibe, setVibe] = useState<string>(DEFAULT_VIBE);
   const enterButtonRef = useRef<HTMLButtonElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  function moveCursorGradient(event: PointerEvent<HTMLElement>) {
+    const root = rootRef.current;
+    if (!root) return;
+
+    const rect = root.getBoundingClientRect();
+    root.style.setProperty("--cursor-x", `${event.clientX - rect.left}px`);
+    root.style.setProperty("--cursor-y", `${event.clientY - rect.top}px`);
+    root.style.setProperty("--cursor-opacity", "1");
+  }
+
+  function hideCursorGradient() {
+    rootRef.current?.style.setProperty("--cursor-opacity", "0");
+  }
 
   function enter() {
     if (!("geolocation" in navigator)) {
@@ -86,7 +103,7 @@ export default function EntryGate({
     }
     setStatus("locating");
     navigator.geolocation.getCurrentPosition(
-      (pos) => onReady(pos.coords.latitude, pos.coords.longitude),
+      (pos) => onReady(pos.coords.latitude, pos.coords.longitude, vibe),
       (err) => {
         setStatus("error");
         setError(
@@ -151,8 +168,38 @@ export default function EntryGate({
 
   return (
     <div
+      ref={rootRef}
+      onPointerMove={moveCursorGradient}
+      onPointerLeave={hideCursorGradient}
+      style={
+        {
+          "--cursor-x": "50%",
+          "--cursor-y": "50%",
+          "--cursor-opacity": "0",
+        } as CSSProperties
+      }
       className={`${sora.className} relative isolate flex min-h-full flex-1 flex-col items-center justify-center overflow-hidden bg-[#f5f5f7] px-6 text-[#1d1d1f] dark:bg-[#1d1d1f] dark:text-[#f5f5f7]`}
     >
+      {/* Cursor-following gradient */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 transition-opacity duration-300"
+        style={{
+          opacity: "var(--cursor-opacity)",
+          background:
+            "radial-gradient(420px circle at var(--cursor-x) var(--cursor-y), rgba(29,29,31,0.12), transparent 70%)",
+        }}
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 hidden transition-opacity duration-300 dark:block"
+        style={{
+          opacity: "var(--cursor-opacity)",
+          background:
+            "radial-gradient(420px circle at var(--cursor-x) var(--cursor-y), rgba(245,245,247,0.14), transparent 70%)",
+        }}
+      />
+
       {/* Moving monochrome backdrop */}
       <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
         <div className="orb orb-a left-[-10%] top-[-10%] h-[42rem] w-[42rem] bg-[#1d1d1f]/10 dark:bg-[#f5f5f7]/10" />
@@ -166,7 +213,7 @@ export default function EntryGate({
             <span
               key={line}
               className="entry-prelude-line"
-              style={{ animationDelay: `${260 + index * 760}ms` }}
+              style={{ animationDelay: `${260 + index * 460}ms` }}
             >
               {line}
             </span>
@@ -235,6 +282,35 @@ export default function EntryGate({
             />
           </span>
         </p>
+
+        <div className="note-reveal mx-auto mt-8 flex max-w-lg flex-col items-center gap-3">
+          <span className="text-xs font-medium uppercase tracking-wide text-[#1d1d1f]/45 dark:text-[#f5f5f7]/45">
+            Pick your vibe
+          </span>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            {VIBES.map((v) => {
+              const active = v.id === vibe;
+              return (
+                <button
+                  key={v.id}
+                  type="button"
+                  onClick={() => setVibe(v.id)}
+                  aria-pressed={active}
+                  className="group inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium transition-[transform,background-color,border-color] duration-200 hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-offset-2"
+                  style={{
+                    borderColor: active ? v.color : "transparent",
+                    backgroundColor: active ? `${v.color}1f` : "rgba(127,127,127,0.1)",
+                    color: active ? v.color : "inherit",
+                    outlineColor: v.color,
+                  }}
+                >
+                  <span aria-hidden>{v.emoji}</span>
+                  {v.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
 
         <div
           className="button-reveal -mx-10 -mb-10 mt-[-0.25rem] inline-flex p-10"

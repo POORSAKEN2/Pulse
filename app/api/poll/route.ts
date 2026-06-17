@@ -57,7 +57,7 @@ export async function GET(request: NextRequest) {
       id: { not: id },
       lastSeen: { gte: staleCutoff },
     },
-    select: { id: true, lat: true, lng: true, busy: true },
+    select: { id: true, lat: true, lng: true, busy: true, vibe: true },
     orderBy: { lastSeen: "desc" },
     take: MAX_PEERS,
   });
@@ -80,6 +80,7 @@ export async function GET(request: NextRequest) {
       lat: p.lat,
       lng: p.lng,
       busy: p.busy,
+      vibe: p.vibe,
     })),
     signals: inbox.map((s) => ({
       id: s.id,

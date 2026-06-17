@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { applyPrivacyOffset, isValidLatLng } from "@/lib/geo";
 import { isValidSessionId } from "@/lib/validate";
+import { isValidVibe } from "@/lib/vibes";
 import { clientIp, rateLimit, tooManyRequests } from "@/lib/ratelimit";
 
 export const runtime = "nodejs";
@@ -23,13 +24,18 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: "invalid body" }, { status: 400 });
   }
 
-  const { id, lat, lng } = (body ?? {}) as Record<string, unknown>;
+  const { id, lat, lng, vibe } = (body ?? {}) as Record<string, unknown>;
 
   if (!isValidSessionId(id)) {
     return Response.json({ error: "invalid id" }, { status: 400 });
   }
   if (!isValidLatLng(lat, lng)) {
     return Response.json({ error: "invalid coordinates" }, { status: 400 });
+  }
+  // Vibe is optional, but if present it must be one of the fixed set — never
+  // trust a client-supplied string into the store.
+  if (vibe !== undefined && vibe !== null && !isValidVibe(vibe)) {
+    return Response.json({ error: "invalid vibe" }, { status: 400 });
   }
 
   const offset = applyPrivacyOffset(lat as number, lng as number);
@@ -46,6 +52,7 @@ export async function POST(request: NextRequest) {
         lat: offset.lat,
         lng: offset.lng,
         busy: false,
+        vibe: isValidVibe(vibe) ? vibe : null,
         lastSeen: new Date(),
       },
     });

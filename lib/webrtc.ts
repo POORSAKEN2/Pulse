@@ -3,7 +3,11 @@ export type PeerControl =
   | "video-request"
   | "video-accept"
   | "video-decline"
-  | "video-end";
+  | "video-end"
+  | "mic-on"
+  | "mic-off"
+  | "cam-on"
+  | "cam-off";
 
 interface PeerCallbacks {
   onSignal: (type: DescType, payload: string) => void;
@@ -25,6 +29,7 @@ export class PeerSession {
   private makingOffer = false;
   private ignoreOffer = false;
   private localStream: MediaStream | null = null;
+  private tracksAttached = false;
   private closed = false;
   private readonly cb: PeerCallbacks;
   private pendingCandidates: RTCIceCandidateInit[] = [];
@@ -107,8 +112,10 @@ export class PeerSession {
     this.ignoreOffer = !this.polite && offerCollision;
     if (this.ignoreOffer) return;
 
-    await this.flushPendingCandidates();
     await this.pc.setRemoteDescription(desc);
+    // Flush AFTER remoteDescription is set — addIceCandidate throws if it runs
+    // first, which would silently drop every queued (early-arriving) candidate.
+    await this.flushPendingCandidates();
     if (desc.type === "offer") {
       await this.pc.setLocalDescription();
       if (this.pc.localDescription) {
@@ -143,17 +150,50 @@ export class PeerSession {
     }
   }
 
-  async startVideo(): Promise<MediaStream> {
+  // Grab the camera/mic only. Split out from startVideo so the *requester* can
+  // call this synchronously inside the click handler (getUserMedia must run in a
+  // user gesture — calling it later from a network/signaling callback is
+  // rejected by Safari/iOS and is flaky elsewhere). Does NOT addTrack, so no
+  // media is sent until the peer accepts and startVideo() attaches.
+  async acquireMedia(): Promise<MediaStream> {
     if (!this.localStream) {
       this.localStream = await navigator.mediaDevices.getUserMedia({
         video: true,
         audio: true,
       });
-      for (const track of this.localStream.getTracks()) {
-        this.pc.addTrack(track, this.localStream);
-      }
     }
     return this.localStream;
+  }
+
+  async startVideo(): Promise<MediaStream> {
+    const stream = await this.acquireMedia();
+    if (!this.tracksAttached) {
+      for (const track of stream.getTracks()) {
+        this.pc.addTrack(track, stream);
+      }
+      this.tracksAttached = true;
+    }
+    return stream;
+  }
+
+  // Toggle the local mic track on/off. Returns the new enabled state (false if
+  // there's no audio track yet). Uses track.enabled so the sender/connection
+  // stays intact — no renegotiation, peer just receives silence.
+  setMic(on: boolean): boolean {
+    const track = this.localStream?.getAudioTracks()[0];
+    if (!track) return false;
+    track.enabled = on;
+    return on;
+  }
+
+  // Toggle the local camera track on/off. Same approach as setMic: track.enabled
+  // keeps the track in place (no renegotiation), peer receives a frozen/black
+  // frame and is told via the cam-on/cam-off control.
+  setCam(on: boolean): boolean {
+    const track = this.localStream?.getVideoTracks()[0];
+    if (!track) return false;
+    track.enabled = on;
+    return on;
   }
 
   stopVideo() {
@@ -167,6 +207,7 @@ export class PeerSession {
         }
       }
       this.localStream = null;
+      this.tracksAttached = false;
     }
   }
 
