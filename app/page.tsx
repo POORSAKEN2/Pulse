@@ -35,7 +35,9 @@ const REQUEST_TIMEOUT_MS = 30_000;
 
 export default function Home() {
   const [phase, setPhase] = useState<"gate" | "live">("gate");
-  const [sessionId] = useState(() => crypto.randomUUID());
+  // Regenerated on disconnect and on a failed join so a re-entry never reuses a
+  // session id that still has a presence row mid-delete (which would 409).
+  const [sessionId, setSessionId] = useState(() => crypto.randomUUID());
   const [peers, setPeers] = useState<PeerDot[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
@@ -283,6 +285,10 @@ export default function Home() {
     setPeers([]);
     blockedRef.current.clear();
     setBlocked([]);
+    // Fresh id for the next entry. leave() above already fired with the old id
+    // (and its token), so the old row is on its way out; a new id avoids racing
+    // that delete with a same-id create (409).
+    setSessionId(crypto.randomUUID());
     setPhase("gate");
   }
 
@@ -466,7 +472,15 @@ export default function Home() {
   async function handleReady(lat: number, lng: number, vibe: string) {
     setMyLocation({ lat, lng });
     setMyVibe(vibe);
-    await join(sessionId, lat, lng, vibe);
+    try {
+      await join(sessionId, lat, lng, vibe);
+    } catch (e) {
+      // Join failed (rate limit, network, or a half-created row → 409). Mint a
+      // fresh id so the retry can't keep hitting the same wedged id, then
+      // rethrow so EntryGate surfaces the error instead of spinning forever.
+      setSessionId(crypto.randomUUID());
+      throw e;
+    }
     setPhase("live");
   }
 

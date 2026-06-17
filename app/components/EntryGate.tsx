@@ -73,7 +73,7 @@ function clamp(value: number, min: number, max: number) {
 export default function EntryGate({
   onReady,
 }: {
-  onReady: (lat: number, lng: number, vibe: string) => void;
+  onReady: (lat: number, lng: number, vibe: string) => void | Promise<void>;
 }) {
   const [status, setStatus] = useState<"idle" | "locating" | "error">("idle");
   const [error, setError] = useState<string>("");
@@ -103,7 +103,16 @@ export default function EntryGate({
     }
     setStatus("locating");
     navigator.geolocation.getCurrentPosition(
-      (pos) => onReady(pos.coords.latitude, pos.coords.longitude, vibe),
+      async (pos) => {
+        try {
+          // onReady joins the server; if that rejects we must drop out of the
+          // "locating" spinner instead of hanging on it indefinitely.
+          await onReady(pos.coords.latitude, pos.coords.longitude, vibe);
+        } catch {
+          setStatus("error");
+          setError("Couldn't join right now. Please try again.");
+        }
+      },
       (err) => {
         setStatus("error");
         setError(
