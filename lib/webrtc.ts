@@ -18,9 +18,45 @@ interface PeerCallbacks {
   onChannelOpen: () => void;
 }
 
-const ICE_CONFIG: RTCConfiguration = {
-  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-};
+// STUN alone only works when both peers can reach each other directly (same
+// network / friendly NAT). Cross-network calls (mobile data, symmetric NAT,
+// firewalls) need a TURN relay or the connection goes to "failed". TURN creds
+// are read from env so they aren't hardcoded; without them we fall back to
+// STUN-only, which is fine for local dev.
+function buildIceConfig(): RTCConfiguration {
+  const iceServers: RTCIceServer[] = [
+    { urls: "stun:stun.l.google.com:19302" },
+  ];
+
+  const turnUrls = process.env.NEXT_PUBLIC_TURN_URLS;
+  const turnUser = process.env.NEXT_PUBLIC_TURN_USERNAME;
+  const turnCred = process.env.NEXT_PUBLIC_TURN_CREDENTIAL;
+
+  if (turnUrls && turnUser && turnCred) {
+    iceServers.push({
+      urls: turnUrls.split(",").map((u) => u.trim()).filter(Boolean),
+      username: turnUser,
+      credential: turnCred,
+    });
+  }
+
+  return { iceServers };
+}
+
+const ICE_CONFIG: RTCConfiguration = buildIceConfig();
+
+// TEMP diagnostic — confirms whether TURN actually made it into the running
+// bundle. If you don't see hasTURN:true here, the build didn't pick up the env
+// vars (rebuild needed, or deploy host is missing them). Remove once fixed.
+if (typeof window !== "undefined") {
+  const hasTURN = (ICE_CONFIG.iceServers ?? []).some((s) => {
+    const u = s.urls;
+    return Array.isArray(u)
+      ? u.some((x) => x.startsWith("turn"))
+      : typeof u === "string" && u.startsWith("turn");
+  });
+  console.log("[webrtc] ICE config", { hasTURN, servers: ICE_CONFIG.iceServers });
+}
 
 export class PeerSession {
   private pc: RTCPeerConnection;
@@ -41,6 +77,10 @@ export class PeerSession {
 
     this.pc.onicecandidate = ({ candidate }) => {
       if (candidate) {
+        // TEMP diagnostic — log candidate type. "relay" = TURN is working and
+        // cross-network will connect. If you only ever see "host"/"srflx" and
+        // never "relay", TURN creds/host are wrong or quota is exhausted.
+        console.log("[webrtc] local candidate", candidate.type, candidate.candidate);
         this.cb.onSignal("ice", JSON.stringify(candidate));
       }
     };

@@ -235,6 +235,26 @@ block *on*. Block is therefore **session-scoped and client-side**:
   **auto-declined** before it ever surfaces a prompt.
 - Dies with the tab, exactly like the rest of Pulse.
 
+### Video / WebRTC hardening (`lib/webrtc.ts`)
+While building out the video flow I fixed and extended the peer layer:
+- **ICE candidate ordering bug.** Pending (early-arriving) candidates were flushed
+  **before** `setRemoteDescription`, so `addIceCandidate` threw and every queued
+  candidate was silently dropped — a real source of "video won't connect". Now the
+  flush runs **after** the remote description is set.
+- **getUserMedia must run in a user gesture.** Split the old `startVideo()` into
+  `acquireMedia()` (grabs camera/mic, callable **synchronously inside the click
+  handler**) and `startVideo()` (attaches the tracks to the peer connection).
+  Requesting media from a later network/signaling callback is rejected by
+  Safari/iOS and flaky elsewhere; this guarantees the prompt fires on the tap.
+  `acquireMedia` deliberately does **not** `addTrack`, so no media is sent until the
+  other side accepts.
+- **Mic / camera toggles** (`setMic` / `setCam`) via `track.enabled` — no
+  renegotiation; the sender stays attached and the peer just receives silence / a
+  frozen frame, told which via new `mic-on/off` + `cam-on/off` control messages
+  (`PeerControl`).
+- A `tracksAttached` guard prevents double-`addTrack` across acquire→start, and
+  it's reset in `stopVideo()` so a later call re-attaches cleanly.
+
 ### What I'd do next with more time
 - **Vibe-aware matchmaking:** a "connect me to a random Music person" button
   instead of only tap-to-connect.
